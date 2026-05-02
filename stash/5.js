@@ -27,19 +27,17 @@ const MSG_DELAY = 1200;
 const duels = {};
 
 // ─── ОЧЕРЕДЬ ──────────────────────────────────────────────────────────────────
+// enqueue возвращает Promise который резолвится когда ЭТОТ конкретный
+// элемент очереди отправлен и пауза после него выдержана.
 const queues = {};
 
 function enqueue(chatId, fn) {
   if (!queues[chatId]) queues[chatId] = Promise.resolve();
   const result = queues[chatId].then(() =>
-    fn().catch(err => {
-      // Глотаем "message is not modified" — это не настоящая ошибка
-      if (err.message && err.message.includes('message is not modified')) return;
-      console.error('Send error:', err.message);
-    })
+    fn().catch(err => console.error('Send error:', err.message))
   ).then(() => sleep(MSG_DELAY));
   queues[chatId] = result;
-  return result;
+  return result; // <-- возвращаем Promise этого конкретного элемента
 }
 
 // ─── УТИЛИТЫ ──────────────────────────────────────────────────────────────────
@@ -109,10 +107,6 @@ async function openBotChest(bot, chatId, threadId) {
   duel.emojis.opponent.push(item.emoji);
   duel.rounds.opponent++;
 
-  // ФИХ: все три сообщения ставим в очередь последовательно,
-  // и только после того как последнее реально отправлено — идём дальше.
-  // Для этого вызываем advanceDuel внутри третьего enqueue-callback,
-  // но чтобы не смешивать с очередью — ждём финальный enqueue снаружи.
   await enqueue(chatId, () => bot.sendMessage(
     chatId,
     `🤖 <b>Бот</b> открывает сундук ${duel.rounds.opponent} из ${CHEST_ROUNDS}...`,
@@ -125,19 +119,13 @@ async function openBotChest(bot, chatId, threadId) {
     { parse_mode: 'HTML', message_thread_id: threadId }
   ));
 
-  // Все три сообщения уже в очереди и будут отправлены по порядку.
-  // advanceDuel добавит свои задачи после них — порядок гарантирован.
+  // Все три сообщения отправлены — идём дальше
   await advanceDuel(bot, chatId, threadId);
 }
 
 async function handleDuelTimeout(bot, chatId, threadId) {
   const duel = duels[chatId];
   if (!duel) return;
-
-  // ФИХ: защита от двойного срабатывания таймаута
-  if (duel.processing) return;
-  duel.processing = true;
-
   const name = duel[duel.currentPlayer].name;
   duel.emojis[duel.currentPlayer].push('🔥');
   duel.rounds[duel.currentPlayer]++;
@@ -147,8 +135,6 @@ async function handleDuelTimeout(bot, chatId, threadId) {
     `⏰ Время вышло! <b>${name}</b> зазевался — сундук сгорел, 0 монет.`,
     { parse_mode: 'HTML', message_thread_id: threadId }
   ));
-
-  duel.processing = false;
   await advanceDuel(bot, chatId, threadId);
 }
 
@@ -239,7 +225,6 @@ bot.onText(/\/duel/, (msg) => {
     scores: { challenger: 0, opponent: 0 },
     emojis: { challenger: [], opponent: [] },
     threadId, timer: null,
-    processing: false, // ФИХ: флаг защиты от race condition
   };
 
   enqueue(chatId, () => bot.sendMessage(
@@ -323,20 +308,9 @@ bot.on('callback_query', async (query) => {
     if (!duel) { await bot.answerCallbackQuery(query.id, { text: 'Дуэль уже закончилась.' }); return; }
     if (userId !== expectedUserId) { await bot.answerCallbackQuery(query.id, { text: 'Это не твой сундук! 👀' }); return; }
 
-    // ФИХ: защита от двойного клика / race condition
-    if (duel.processing) { await bot.answerCallbackQuery(query.id, { text: '⏳ Подожди...' }); return; }
-    duel.processing = true;
-
     clearDuelTimer(chatId);
     await bot.answerCallbackQuery(query.id);
-
-    // Глотаем 400 если кнопка уже убрана (повторный клик по старому сообщению)
-    await bot.editMessageReplyMarkup(
-      { inline_keyboard: [] },
-      { chat_id: chatId, message_id: msg.message_id }
-    ).catch(err => {
-      if (!err.message?.includes('message is not modified')) console.error('editMarkup error:', err.message);
-    });
+    await bot.editMessageReplyMarkup({ inline_keyboard: [] }, { chat_id: chatId, message_id: msg.message_id });
 
     const player = duel.currentPlayer;
     const item = rollLoot();
@@ -350,11 +324,7 @@ bot.on('callback_query', async (query) => {
       `${item.emoji} <b>${item.rarity}</b> — <b>+${item.coins} монет</b>`,
       { parse_mode: 'HTML', message_thread_id: duel.threadId }
     ));
-
     await advanceDuel(bot, chatId, duel.threadId);
-
-    // Снимаем флаг только после того как advanceDuel полностью завершился
-    if (duels[chatId]) duel.processing = false;
     return;
   }
 });
