@@ -1,6 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 
-const TOKEN = '8713413829:AAHnUe4ww7fliDUQRzZ2ypBbUj5VnVWbe4c';
+const TOKEN = '8713413829:AAHK8wltc8Zs6t1CX-fSKsQvTtF0OXPh_RA';
 
 const LOOT_TABLE = [
   {
