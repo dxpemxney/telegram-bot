@@ -35,21 +35,10 @@ const LOOT_TABLE = [
 
 const CHEST_ROUNDS = 5;
 const DUEL_TIMEOUT = 5000;
-const MSG_DELAY = 1100; // минимум 1 сек между сообщениями в один чат
+const BOT_OPEN_DELAY = 1500; // пауза между сундуками бота (мс)
 
+// ─── ХРАНИЛИЩЕ ДУЭЛЕЙ ─────────────────────────────────────────────────────────
 const duels = {};
-
-// ─── ОЧЕРЕДЬ СООБЩЕНИЙ ────────────────────────────────────────────────────────
-// Для каждого чата своя очередь — сообщения идут строго по одному
-const queues = {};
-
-function enqueue(chatId, fn) {
-  if (!queues[chatId]) queues[chatId] = Promise.resolve();
-  queues[chatId] = queues[chatId].then(() =>
-    fn().catch(err => console.error('Send error:', err.message))
-  ).then(() => sleep(MSG_DELAY));
-  return queues[chatId];
-}
 
 // ─── ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ──────────────────────────────────────────────────
 
@@ -97,7 +86,9 @@ async function sendNextChest(bot, chatId, threadId) {
 
   const player = duel.currentPlayer;
 
+  // Если текущий игрок — бот, открываем автоматически
   if (player === 'opponent' && duel.vsBot) {
+    await sleep(BOT_OPEN_DELAY);
     await openBotChest(bot, chatId, threadId);
     return;
   }
@@ -105,7 +96,7 @@ async function sendNextChest(bot, chatId, threadId) {
   const name = duel[player].name;
   const round = duel.rounds[player] + 1;
 
-  enqueue(chatId, () => bot.sendMessage(
+  await bot.sendMessage(
     chatId,
     `🎁 <b>${name}</b>, открывай сундук ${round} из ${CHEST_ROUNDS}!\n⏰ У тебя 5 секунд...`,
     {
@@ -118,7 +109,7 @@ async function sendNextChest(bot, chatId, threadId) {
         }]],
       },
     }
-  ));
+  );
 
   clearDuelTimer(chatId);
   duel.timer = setTimeout(() => {
@@ -126,6 +117,7 @@ async function sendNextChest(bot, chatId, threadId) {
   }, DUEL_TIMEOUT);
 }
 
+// Бот открывает свой сундук автоматически
 async function openBotChest(bot, chatId, threadId) {
   const duel = duels[chatId];
   if (!duel) return;
@@ -135,22 +127,21 @@ async function openBotChest(bot, chatId, threadId) {
   duel.emojis.opponent.push(item.emoji);
   duel.rounds.opponent++;
 
-  enqueue(chatId, () => bot.sendMessage(
+  await bot.sendMessage(
     chatId,
     `🤖 <b>Бот</b> открывает сундук ${duel.rounds.opponent} из ${CHEST_ROUNDS}...`,
     { parse_mode: 'HTML', message_thread_id: threadId }
-  ));
+  );
 
-  enqueue(chatId, () => bot.sendSticker(chatId, item.fileId, { message_thread_id: threadId }));
-
-  enqueue(chatId, () => bot.sendMessage(
+  await sleep(800);
+  await bot.sendSticker(chatId, item.fileId, { message_thread_id: threadId });
+  await bot.sendMessage(
     chatId,
     `${item.emoji} <b>${item.rarity}</b> — <b>+${item.coins} монет</b>`,
     { parse_mode: 'HTML', message_thread_id: threadId }
-  ));
+  );
 
-  // Ждём пока очередь дойдёт до конца, потом продолжаем дуэль
-  queues[chatId].then(() => advanceDuel(bot, chatId, threadId));
+  await advanceDuel(bot, chatId, threadId);
 }
 
 async function handleDuelTimeout(bot, chatId, threadId) {
@@ -163,13 +154,13 @@ async function handleDuelTimeout(bot, chatId, threadId) {
   duel.emojis[player].push('🔥');
   duel.rounds[player]++;
 
-  enqueue(chatId, () => bot.sendMessage(
+  await bot.sendMessage(
     chatId,
     `⏰ Время вышло! <b>${name}</b> зазевался — сундук сгорел, 0 монет.`,
     { parse_mode: 'HTML', message_thread_id: threadId }
-  ));
+  );
 
-  queues[chatId].then(() => advanceDuel(bot, chatId, threadId));
+  await advanceDuel(bot, chatId, threadId);
 }
 
 async function advanceDuel(bot, chatId, threadId) {
@@ -184,17 +175,19 @@ async function advanceDuel(bot, chatId, threadId) {
   }
 
   if (player === 'challenger' && duel.rounds.opponent < CHEST_ROUNDS) {
-    enqueue(chatId, () => bot.sendMessage(
+    const opponentName = duel.opponent.name;
+    const challengerScore = duel.scores.challenger;
+    await bot.sendMessage(
       chatId,
-      `✅ <b>${duel.challenger.name}</b> закончил — <b>${duel.scores.challenger} монет</b>!\n\nТеперь <b>${duel.opponent.name}</b>!`,
+      `✅ <b>${duel.challenger.name}</b> закончил — <b>${challengerScore} монет</b>!\n\nТеперь <b>${opponentName}</b>!`,
       { parse_mode: 'HTML', message_thread_id: threadId }
-    ));
+    );
     duel.currentPlayer = 'opponent';
-    queues[chatId].then(() => sendNextChest(bot, chatId, threadId));
+    await sendNextChest(bot, chatId, threadId);
     return;
   }
 
-  queues[chatId].then(() => finishDuel(bot, chatId, threadId));
+  await finishDuel(bot, chatId, threadId);
 }
 
 async function finishDuel(bot, chatId, threadId) {
@@ -215,14 +208,14 @@ async function finishDuel(bot, chatId, threadId) {
   else if (os > cs) result = `🏆 Победил <b>${on}</b>!`;
   else result = `🤝 Ничья!`;
 
-  enqueue(chatId, () => bot.sendMessage(
+  await bot.sendMessage(
     chatId,
     `📊 <b>Итог дуэли:</b>\n\n` +
     `${cn} — ${ce} = <b>${cs} монет</b>\n` +
     `${on} — ${oe} = <b>${os} монет</b>\n\n` +
     result,
     { parse_mode: 'HTML', message_thread_id: threadId }
-  ));
+  );
 
   delete duels[chatId];
 }
@@ -232,19 +225,19 @@ async function finishDuel(bot, chatId, threadId) {
 const bot = new TelegramBot(TOKEN, { polling: true });
 
 bot.onText(/\/start/, (msg) => {
-  enqueue(msg.chat.id, () => bot.sendMessage(
+  bot.sendMessage(
     msg.chat.id,
     '👋 Привет!\n\n<b>/chest</b> — выставить сундук\n<b>/duel</b> — вызвать на дуэль',
     { parse_mode: 'HTML' }
-  ));
+  );
 });
 
 bot.onText(/\/chest/, (msg) => {
-  enqueue(msg.chat.id, () => bot.sendMessage(
+  bot.sendMessage(
     msg.chat.id,
     '🎁 <b>Сундук Perfect World</b>\n\nКто рискнёт открыть?',
     { parse_mode: 'HTML', ...CHEST_KEYBOARD }
-  ));
+  );
 });
 
 bot.onText(/\/duel/, (msg) => {
@@ -252,9 +245,9 @@ bot.onText(/\/duel/, (msg) => {
   const threadId = getThreadId(msg);
 
   if (duels[chatId]) {
-    enqueue(chatId, () => bot.sendMessage(chatId, '⚔️ Дуэль уже идёт! Дождитесь конца.', {
+    bot.sendMessage(chatId, '⚔️ Дуэль уже идёт! Дождитесь конца.', {
       message_thread_id: threadId,
-    }));
+    });
     return;
   }
 
@@ -273,7 +266,7 @@ bot.onText(/\/duel/, (msg) => {
     timer: null,
   };
 
-  enqueue(chatId, () => bot.sendMessage(
+  bot.sendMessage(
     chatId,
     `⚔️ <b>${challenger.name}</b> вызывает на дуэль!\n\nКто примет вызов?`,
     {
@@ -286,7 +279,7 @@ bot.onText(/\/duel/, (msg) => {
         ]],
       },
     }
-  ));
+  );
 });
 
 bot.on('callback_query', async (query) => {
@@ -300,16 +293,16 @@ bot.on('callback_query', async (query) => {
     const name = getUserName(query.from);
     const item = rollLoot();
 
-    enqueue(chatId, () => bot.sendSticker(chatId, item.fileId));
-    enqueue(chatId, () => bot.sendMessage(
+    await bot.sendSticker(chatId, item.fileId);
+    await bot.sendMessage(
       chatId,
       `${item.emoji} <b>${item.rarity}!</b>\n${name} вытащил: <b>${item.name}</b>\n\n🎁 <b>Сундук Perfect World</b>\nКто рискнёт открыть?`,
       { parse_mode: 'HTML', ...CHEST_KEYBOARD }
-    ));
+    );
     return;
   }
 
-  // ── Принять дуэль ─────────────────────────────────────────────────────────
+  // ── Принять дуэль (живой игрок) ───────────────────────────────────────────
   if (data.startsWith('duel_accept:')) {
     const chatId = parseInt(data.split(':')[1]);
     const duel = duels[chatId];
@@ -333,13 +326,13 @@ bot.on('callback_query', async (query) => {
       message_id: query.message.message_id,
     });
 
-    enqueue(chatId, () => bot.sendMessage(
+    await bot.sendMessage(
       chatId,
       `⚔️ <b>${duel.challenger.name}</b> vs <b>${duel.opponent.name}</b>\n\nДуэль началась! Каждый открывает ${CHEST_ROUNDS} сундуков.\nНачинает <b>${duel.challenger.name}</b>!`,
       { parse_mode: 'HTML', message_thread_id: duel.threadId }
-    ));
+    );
 
-    queues[chatId].then(() => sendNextChest(bot, chatId, duel.threadId));
+    await sendNextChest(bot, chatId, duel.threadId);
     return;
   }
 
@@ -352,6 +345,7 @@ bot.on('callback_query', async (query) => {
       await bot.answerCallbackQuery(query.id, { text: 'Дуэль уже началась или отменена.' });
       return;
     }
+    // Принять дуэль с ботом может только сам вызвавший
     if (userId !== duel.challenger.id) {
       await bot.answerCallbackQuery(query.id, { text: 'Только вызвавший может играть с ботом!' });
       return;
@@ -367,13 +361,13 @@ bot.on('callback_query', async (query) => {
       message_id: query.message.message_id,
     });
 
-    enqueue(chatId, () => bot.sendMessage(
+    await bot.sendMessage(
       chatId,
       `⚔️ <b>${duel.challenger.name}</b> vs <b>🤖 Бот</b>\n\nДуэль началась! Каждый открывает ${CHEST_ROUNDS} сундуков.\nНачинает <b>${duel.challenger.name}</b>!`,
       { parse_mode: 'HTML', message_thread_id: duel.threadId }
-    ));
+    );
 
-    queues[chatId].then(() => sendNextChest(bot, chatId, duel.threadId));
+    await sendNextChest(bot, chatId, duel.threadId);
     return;
   }
 
@@ -408,14 +402,14 @@ bot.on('callback_query', async (query) => {
     duel.emojis[player].push(item.emoji);
     duel.rounds[player]++;
 
-    enqueue(chatId, () => bot.sendSticker(chatId, item.fileId, { message_thread_id: duel.threadId }));
-    enqueue(chatId, () => bot.sendMessage(
+    await bot.sendSticker(chatId, item.fileId, { message_thread_id: duel.threadId });
+    await bot.sendMessage(
       chatId,
       `${item.emoji} <b>${item.rarity}</b> — <b>+${item.coins} монет</b>`,
       { parse_mode: 'HTML', message_thread_id: duel.threadId }
-    ));
+    );
 
-    queues[chatId].then(() => advanceDuel(bot, chatId, duel.threadId));
+    await advanceDuel(bot, chatId, duel.threadId);
     return;
   }
 });
