@@ -1,7 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 
 // РЕКОМЕНДАЦИЯ: Замени токен на новый и используй process.env.TOKEN на Railway
-const TOKEN = '8713413829:AAHnUe4ww7fliDUQRzZ2ypBbUj5VnVWbe4c';
+const TOKEN = process.env.TOKEN;
 
 const LOOT_TABLE = [
   {
