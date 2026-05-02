@@ -22,7 +22,7 @@ const LOOT_TABLE = [
 
 const CHEST_ROUNDS = 5;
 const DUEL_TIMEOUT = 5000;
-const MSG_DELAY = 600;
+const MSG_DELAY = 1200;
 
 const duels = {};
 
@@ -93,10 +93,6 @@ async function playBotRound(bot, chatId, threadId) {
   const duel = duels[chatId];
   if (!duel) return;
 
-  // Блокируем таймер и параллельные вызовы на время хода бота
-  clearDuelTimer(chatId);
-  duel.processing = true;
-
   const item = rollLoot();
   duel.scores.opponent += item.coins;
   duel.emojis.opponent.push(item.emoji);
@@ -116,12 +112,11 @@ async function playBotRound(bot, chatId, threadId) {
   ));
 
   if (duel.rounds.opponent < CHEST_ROUNDS) {
+    // Ждём пока все три enqueue выше завершатся, затем следующий раунд
     await queues[chatId];
-    duel.processing = false;
     await playBotRound(bot, chatId, threadId);
   } else {
     await queues[chatId];
-    duel.processing = false;
     await finishDuel(bot, chatId, threadId);
   }
 }
@@ -191,7 +186,6 @@ async function advanceDuel(bot, chatId, threadId) {
       { parse_mode: 'HTML', message_thread_id: threadId }
     ));
     duel.currentPlayer = 'opponent';
-    clearDuelTimer(chatId);
     await sendNextChest(bot, chatId, threadId);
     return;
   }
