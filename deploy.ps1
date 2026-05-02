@@ -1,7 +1,7 @@
 # ─── НАСТРОЙКИ ────────────────────────────────────────────────────────────────
 $repoPath = "C:\Users\dopemoney\telegram-bot"  # замени на свой путь
 $githubUser = "dxpemxney"                   # замени
-$githubToken = "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"               # замени
+$githubToken = "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"               # замени
 $commitMessage = "update"
 # ──────────────────────────────────────────────────────────────────────────────
 
