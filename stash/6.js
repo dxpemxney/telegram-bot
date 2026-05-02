@@ -78,7 +78,7 @@ async function sendNextChest(bot, chatId, threadId) {
   const player = duel.currentPlayer;
 
   if (player === 'opponent' && duel.vsBot) {
-    await openBotAllChests(bot, chatId, threadId);
+    await openBotChest(bot, chatId, threadId);
     return;
   }
 
@@ -100,37 +100,34 @@ async function sendNextChest(bot, chatId, threadId) {
   duel.timer = setTimeout(() => handleDuelTimeout(bot, chatId, threadId), DUEL_TIMEOUT);
 }
 
-async function openBotAllChests(bot, chatId, threadId) {
-  // Прокручиваем все оставшиеся сундуки бота в одном цикле —
-  // никакой рекурсии, rounds инкрементируется строго по одному,
-  // каждый шаг ждёт реальной отправки через очередь.
+async function openBotChest(bot, chatId, threadId) {
   const duel = duels[chatId];
   if (!duel) return;
 
-  while (duel.rounds.opponent < CHEST_ROUNDS) {
-    if (!duels[chatId]) return; // дуэль могла удалиться
+  const item = rollLoot();
+  duel.scores.opponent += item.coins;
+  duel.emojis.opponent.push(item.emoji);
+  duel.rounds.opponent++;
 
-    const item = rollLoot();
-    duel.scores.opponent += item.coins;
-    duel.emojis.opponent.push(item.emoji);
-    duel.rounds.opponent++;
-    const roundNum = duel.rounds.opponent;
+  // ФИХ: все три сообщения ставим в очередь последовательно,
+  // и только после того как последнее реально отправлено — идём дальше.
+  // Для этого вызываем advanceDuel внутри третьего enqueue-callback,
+  // но чтобы не смешивать с очередью — ждём финальный enqueue снаружи.
+  await enqueue(chatId, () => bot.sendMessage(
+    chatId,
+    `🤖 <b>Бот</b> открывает сундук ${duel.rounds.opponent} из ${CHEST_ROUNDS}...`,
+    { parse_mode: 'HTML', message_thread_id: threadId }
+  ));
+  await enqueue(chatId, () => bot.sendSticker(chatId, item.fileId, { message_thread_id: threadId }));
+  await enqueue(chatId, () => bot.sendMessage(
+    chatId,
+    `${item.emoji} <b>${item.rarity}</b> — <b>+${item.coins} монет</b>`,
+    { parse_mode: 'HTML', message_thread_id: threadId }
+  ));
 
-    // Ждём реальной отправки каждого сообщения перед следующим шагом цикла
-    await enqueue(chatId, () => bot.sendMessage(
-      chatId,
-      `🤖 <b>Бот</b> открывает сундук ${roundNum} из ${CHEST_ROUNDS}...`,
-      { parse_mode: 'HTML', message_thread_id: threadId }
-    ));
-    await enqueue(chatId, () => bot.sendSticker(chatId, item.fileId, { message_thread_id: threadId }));
-    await enqueue(chatId, () => bot.sendMessage(
-      chatId,
-      `${item.emoji} <b>${item.rarity}</b> — <b>+${item.coins} монет</b>`,
-      { parse_mode: 'HTML', message_thread_id: threadId }
-    ));
-  }
-
-  await finishDuel(bot, chatId, threadId);
+  // Все три сообщения уже в очереди и будут отправлены по порядку.
+  // advanceDuel добавит свои задачи после них — порядок гарантирован.
+  await advanceDuel(bot, chatId, threadId);
 }
 
 async function handleDuelTimeout(bot, chatId, threadId) {
