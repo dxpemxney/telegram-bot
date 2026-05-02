@@ -13,3 +13,7 @@
     "node-telegram-bot-api": "^0.67.0"
   }
 }
+"engines": {
+  "node": "20.x"
+}
+
