@@ -1,7 +1,16 @@
 const TelegramBot = require('node-telegram-bot-api');
 
-// РЕКОМЕНДАЦИЯ: Замени токен на новый и используй process.env.TOKEN на Railway
-const TOKEN = process.env.TOKEN;
+// Пытаемся найти токен под любым из популярных имен
+const TOKEN = process.env.TOKEN || process.env.BOT_TOKEN || process.env.TELEGRAM_TOKEN;
+
+if (!TOKEN) {
+  console.error("❌ ОШИБКА: Токен не найден в переменных Railway!");
+  console.log("Доступные переменные в системе:", Object.keys(process.env));
+  process.exit(1); 
+}
+
+const bot = new TelegramBot(TOKEN, { polling: true });
+console.log("✅ Бот успешно авторизован и запущен!");
 
 const LOOT_TABLE = [
   {
