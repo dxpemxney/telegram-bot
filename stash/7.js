@@ -27,8 +27,11 @@ const MSG_DELAY = 1200;
 const duels = {};
 
 // ─── ОЧЕРЕДЬ ──────────────────────────────────────────────────────────────────
+// enqueue резолвится только ПОСЛЕ того как fn() полностью выполнилась
+// и пауза MSG_DELAY выдержана. Это гарантирует строгий порядок.
 const queues = {};
 
+// Выполняет fn() с автоматическим retry при 429 Too Many Requests.
 async function callWithRetry(fn) {
   for (;;) {
     try {
@@ -87,47 +90,45 @@ function clearDuelTimer(chatId) {
   if (duels[chatId]?.timer) { clearTimeout(duels[chatId].timer); duels[chatId].timer = null; }
 }
 
-// Ход бота: каждая итерация — отдельная задача в очереди.
-// Очередь сама выдерживает MSG_DELAY между задачами — нет риска rate limit.
-async function playBotRound(bot, chatId, threadId) {
-  const duel = duels[chatId];
-  if (!duel) return;
-
-  const item = rollLoot();
-  duel.scores.opponent += item.coins;
-  duel.emojis.opponent.push(item.emoji);
-  duel.rounds.opponent++;
-  const roundNum = duel.rounds.opponent;
-
-  await enqueue(chatId, () => bot.sendMessage(
-    chatId,
-    `🤖 <b>Бот</b> открывает сундук ${roundNum} из ${CHEST_ROUNDS}...`,
-    { parse_mode: 'HTML', message_thread_id: threadId }
-  ));
-  await enqueue(chatId, () => bot.sendSticker(chatId, item.fileId, { message_thread_id: threadId }));
-  await enqueue(chatId, () => bot.sendMessage(
-    chatId,
-    `${item.emoji} <b>${item.rarity}</b> — <b>+${item.coins} монет</b>`,
-    { parse_mode: 'HTML', message_thread_id: threadId }
-  ));
-
-  if (duel.rounds.opponent < CHEST_ROUNDS) {
-    // Ждём пока все три enqueue выше завершатся, затем следующий раунд
-    await queues[chatId];
-    await playBotRound(bot, chatId, threadId);
-  } else {
-    await queues[chatId];
-    await finishDuel(bot, chatId, threadId);
-  }
-}
-
 async function sendNextChest(bot, chatId, threadId) {
   const duel = duels[chatId];
   if (!duel) return;
   const player = duel.currentPlayer;
 
   if (player === 'opponent' && duel.vsBot) {
-    await playBotRound(bot, chatId, threadId);
+    // Весь цикл бота — одна задача в очереди.
+    // Внутри fn() всё строго последовательно через await,
+    // поэтому rounds никогда не прыгает вперёд.
+    await enqueue(chatId, async () => {
+      const d = duels[chatId];
+      if (!d) return;
+      for (let i = 0; i < CHEST_ROUNDS; i++) {
+        if (!duels[chatId]) return;
+        const item = rollLoot();
+        d.scores.opponent += item.coins;
+        d.emojis.opponent.push(item.emoji);
+        d.rounds.opponent++;
+        const roundNum = d.rounds.opponent;
+
+        await callWithRetry(() => bot.sendMessage(
+          chatId,
+          `🤖 <b>Бот</b> открывает сундук ${roundNum} из ${CHEST_ROUNDS}...`,
+          { parse_mode: 'HTML', message_thread_id: threadId }
+        ));
+        await sleep(MSG_DELAY);
+        await callWithRetry(() => bot.sendSticker(chatId, item.fileId, { message_thread_id: threadId }));
+        await sleep(MSG_DELAY);
+        await callWithRetry(() => bot.sendMessage(
+          chatId,
+          `${item.emoji} <b>${item.rarity}</b> — <b>+${item.coins} монет</b>`,
+          { parse_mode: 'HTML', message_thread_id: threadId }
+        ));
+        if (i < CHEST_ROUNDS - 1) await sleep(MSG_DELAY);
+      }
+    });
+    // enqueue выше завершится только когда fn() реально отработала —
+    // тогда все 5 сундуков уже отправлены, можно финишировать.
+    await finishDuel(bot, chatId, threadId);
     return;
   }
 
@@ -341,9 +342,8 @@ bot.on('callback_query', async (query) => {
 
     if (!duel) { await bot.answerCallbackQuery(query.id, { text: 'Дуэль уже закончилась.' }); return; }
     if (userId !== expectedUserId) { await bot.answerCallbackQuery(query.id, { text: 'Это не твой сундук! 👀' }); return; }
-    if (duel.processing) { await bot.answerCallbackQuery(query.id); return; }
+    if (duel.processing) { await bot.answerCallbackQuery(query.id, { text: '⏳ Подожди...' }); return; }
 
-    // Сразу убираем кнопку — физически блокирует повторное нажатие
     duel.processing = true;
     clearDuelTimer(chatId);
     await bot.answerCallbackQuery(query.id);
@@ -351,7 +351,6 @@ bot.on('callback_query', async (query) => {
       { inline_keyboard: [] },
       { chat_id: chatId, message_id: msg.message_id }
     ).catch(() => {});
-    duel.processing = false;
 
     const player = duel.currentPlayer;
     const item = rollLoot();
@@ -367,6 +366,8 @@ bot.on('callback_query', async (query) => {
     ));
 
     await advanceDuel(bot, chatId, duel.threadId);
+
+    if (duels[chatId]) duel.processing = false;
     return;
   }
 });
